@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.4)
 
 list(APPEND CMAKE_MODULE_PATH ${CIME_CMAKE_MODULE_DIRECTORY})
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../share/cmake")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../components/cmeps/cmake")
 
 FIND_PATH(NETCDFC_FOUND libnetcdf.a ${NETCDF_C_DIR}/lib)
 FIND_PATH(NETCDFF_FOUND libnetcdff.a ${NETCDF_FORTRAN_DIR}/lib)
@@ -11,6 +12,10 @@ MESSAGE(" NETCDFF_FOUND = ${NETCDFF_FOUND}")
 string(APPEND LDFLAGS " -L${NETCDF_FORTRAN_DIR}/lib -lnetcdff")
 string(APPEND LDFLAGS " -L${NETCDF_C_DIR}/lib -lnetcdf")
 
+set(FTORCH_LOC "/glade/u/home/jatkinson/FTorch/bin/oneapi_2023.2.1_torch_2.1")
+string(APPEND LDFLAGS " -L${FTORCH_LOC}/lib64 -lftorch")
+string(APPEND SLIBS " -L${FTORCH_LOC}/lib64 -lftorch")
+
 include(CIME_initial_setup)
 
 project(FATES_tests Fortran C)
@@ -18,6 +23,24 @@ project(FATES_tests Fortran C)
 include(CIME_utils)
 
 set(HLM_ROOT "../../")
+
+# The following - for finding ESMF - is copied from the share CMakeLists.txt
+if (DEFINED ENV{ESMF_ROOT})
+  list(APPEND CMAKE_MODULE_PATH $ENV{ESMF_ROOT}/cmake)
+endif()
+find_package(ESMF REQUIRED)
+
+# This adds include directories needed for ESMF
+set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} ${ESMF_F90COMPILEPATHS} ")
+# This (which is *not* done in the share CMakeLists.txt) adds all directories and
+# libraries needed when linking ESMF, including any dependencies of ESMF. (But note that
+# this does *not* include the "-lesmf" itself). In particular, note that this includes any
+# link flags needed to link against PIO, which is needed on some systems (including
+# derecho); bringing in these PIO-related link flags via this ESMF mechanism allows us to
+# avoid explicitly including PIO as a link library, which wouldn't work on systems where
+# there is no separate PIO library and instead ESMF is built with its internal PIO
+# library.
+link_libraries(${ESMF_INTERFACE_LINK_LIBRARIES})
 
 # Add source directories from other share code (csm_share, etc.)
 add_subdirectory(${HLM_ROOT}/share/src csm_share)
@@ -83,6 +106,9 @@ include_directories(${NETCDF_C_DIR}/include
                     ${NETCDF_FORTRAN_DIR}/include)
 link_directories(${NETCDF_C_DIR}/lib
                 ${NETCDF_FORTRAN_DIR}/lib)
+
+include_directories(${FTORCH_LOC}/include/ftorch)
+link_directories(${FTORCH_LOC}/lib64)
                 
 
 # Tell cmake to look for libraries & mod files here, because this is where we built libraries
@@ -90,6 +116,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 # Directories and libraries to include in the link step
 link_directories(${CMAKE_CURRENT_BINARY_DIR})
+link_libraries( esmf )
               
 # Add the main test directory
 add_subdirectory(${HLM_ROOT}/src/fates/testing)

@@ -7,6 +7,9 @@ add_subdirectory(functional_testing/fire/fuel fates_fuel_ftest)
 add_subdirectory(functional_testing/fire/ros fates_ros_ftest)
 add_subdirectory(functional_testing/patch fates_patch_ftest)
 
+# for linnia!
+add_subdirectory(functional_testing/ml_phenology ml_phenology_ftest)
+
 ## Unit tests
 add_subdirectory(unit_testing/fire_weather_test fates_fire_weather_utest)
 add_subdirectory(unit_testing/fire_fuel_test fates_fire_fuel_utest)
