@@ -3,26 +3,24 @@ program MLPhenology
   use               FatesConstantsMod, only : r8 => fates_r8
   use              FatesArgumentUtils, only : command_line_arg
   use             FatesUnitTestIOMod,  only : OpenNCFile, GetVar, CloseNCFile, RegisterNCDims
-
   implicit none
 
   ! define ML phenoogy pytorch model
   character(len=256) :: the_torch_model = "/glade/u/home/linnia/MLphenology/models/example_LSTM_model_lh.pt"
   character(len=256) :: the_tft_torch_model = "/glade/u/home/ayal/phenology-ml-clm/models/tft_scripted.pt"
-  !character(len=256) :: the_torch_model = "/glade/u/home/ayal/phenology-ml-clm/models/example_LSTM_model_v1.pt"
   
   real(8), dimension(10) :: dummy_lai
   integer :: sos_flag, n
 
   character(len=:),                  allocatable :: datm_file            ! input DATM 
-  real(r8),                          allocatable :: ta_min(:)         ! daily min air temperature [degC]
-  real(r8),                          allocatable :: ta_max(:)         ! daily max air temperature [degC]
-  real(r8),                          allocatable :: pr(:)            ! daily precipitation [mm]
-  real(r8),                          allocatable :: sw(:)                ! daily shortwave radiation (W/m2)
-  real(r8),                          allocatable :: lai(:)              ! daily LAI (m2/m2)
-  real(r8),                          allocatable :: soilm(:)              ! daily soil moisture at layer 3 (kg/m2)
-  real(r8),                          allocatable :: doy(:)              ! day of year
-  real(r8),                          allocatable :: photo(:)              ! daily photoperiod (seconds)
+  real(r8),                          allocatable :: ta_min(:), ta_min_mm(:),  ta_min_std(:), ta_min_stdmm(:)      ! daily min air temperature [degC]
+  real(r8),                          allocatable :: ta_max(:), ta_max_mm(:),  ta_max_std(:), ta_max_stdmm(:)      ! daily max air temperature [degC]
+  real(r8),                          allocatable :: pr(:), pr_mm(:),  pr_std(:), pr_stdmm(:)            ! daily precipitation [mm]
+  real(r8),                          allocatable :: sw(:), sw_mm(:),  sw_std(:), sw_stdmm(:)                ! daily shortwave radiation (W/m2)
+  real(r8),                          allocatable :: lai(:), lai_mm(:),  lai_std(:), lai_stdmm(:)               ! daily LAI (m2/m2)
+  real(r8),                          allocatable :: soilm(:), soilm_mm(:),  soilm_std(:), soilm_stdmm(:)              ! daily soil moisture at layer 3 (kg/m2)
+  real(r8),                          allocatable :: doy(:), doy_mm(:),  doy_std(:), doy_stdmm(:)              ! day of year
+  real(r8),                          allocatable :: photo(:), photo_mm(:),  photo_std(:), photo_stdmm(:)              ! daily photoperiod (seconds)
 
   real(r8)                                       :: doy_arr(10)              ! DOY array
   real(r8)                                       :: out_data(1,5)       ! output from the lstm model (lai)
@@ -34,11 +32,31 @@ program MLPhenology
 
   logical                                        :: do_onset       ! Flag if onset should happen
 
+
+
+
   
   ! Load forcing data
   datm_file = command_line_arg(1) ! one year of daily ta, pr, sw, lai
   call load_met_forcing(datm_file, ta_min, ta_max, pr, sw, lai, soilm, doy, photo)
-  
+
+  ! ======================================
+  ! test normalize_standardize_chain
+  ! normalize and standardize the forcing data
+  call normalize_standardize_chain(ta_min, ta_min_std, ta_min_mm, ta_min_stdmm)
+  call normalize_standardize_chain(ta_max, ta_max_std, ta_max_mm, ta_max_stdmm)
+  call normalize_standardize_chain(pr, pr_std, pr_mm, pr_stdmm)
+  call normalize_standardize_chain(sw, sw_std, sw_mm, sw_stdmm)
+  call normalize_standardize_chain(lai, lai_std, lai_mm, lai_stdmm)
+  call normalize_standardize_chain(soilm, soilm_std, soilm_mm, soilm_stdmm)
+  call normalize_standardize_chain(doy, doy_std, doy_mm, doy_stdmm)
+  call normalize_standardize_chain(photo, photo_std, photo_mm, photo_stdmm)
+  ! print the normalized and standardized data
+  !print *, "raw    min/max: ", minval(lai), maxval(lai)
+  print *, "raw historical LAI ", lai(1:60)
+  !print *, "normalized LAI ", lai_std(1:60)
+  !print *, "minmax LAI ", lai_mm(1:60)
+  print *, "standardized LAI ", lai_stdmm(1:60)
   ! ======================================
   ! test CLM SeasonalDecidOnset function
   dayofyear = 1.0_r8
@@ -58,12 +76,14 @@ program MLPhenology
   call get_sos(dummy_lai, n, sos_flag)
   print *, "start of season Flag:", sos_flag
 
+  
 
   ! ========================================
   ! test tft
 
   call next_ten_days(dayofyear, doy_arr)
-  call run_tft_model(the_tft_torch_model, ta_min, pr, sw, lai, doy_arr, out_data_tft)
+  ! tmin, tmax, precip, rad, photoperiod, swvl1, doy, lai
+  call run_tft_model(the_tft_torch_model, ta_min, ta_max, pr, sw, lai, soilm, doy, photo, doy_arr, out_data_tft)
   print *, "TFT predicted LAI:", out_data_tft
 
   contains
@@ -224,7 +244,57 @@ program MLPhenology
     end function SeasonalDecidOnset
 
     !-----------------------------------------------------------------------
+    subroutine normalize_standardize_chain(                                     &
+            x, x_std, x_mm, x_stdmm)                                               
+        !---------------------------------------------------------------------------
+        ! Given 1-D array x(:),
+        ! produce:
+        !   x_std   = (x - mean)/std
+        !   x_mm    = (x - min)/ (max - min)
+        !   x_stdmm =  minmax( x_std ) in [0,1]
+        !
+        implicit none
+        real(r8), intent(in )  :: x(:)
+        real(r8), intent(out) :: x_std(size(x))
+        real(r8), intent(out) :: x_mm(size(x))
+        real(r8), intent(out) :: x_stdmm(size(x))
 
+        real(r8) :: mu, sigma, xmin, xmax, zmin, zmax
+        integer     :: n
+
+        n    = size(x)
+        xmin = minval(x)
+        xmax = maxval(x)
+        mu   = sum(x) / real(n, r8)
+        if (n > 1) then
+        sigma = sqrt( sum((x-mu)**2) / real(n-1, r8) )
+        else
+        sigma = 1.0_r8
+        end if
+        if (sigma == 0.0_r8) sigma = 1.0_r8
+
+        ! 1) standardize
+        x_std = (x - mu) / sigma
+
+        ! 2) raw → minmax [0,1]
+        if (xmax == xmin) then
+        x_mm = 0.0_r8
+        else
+        x_mm = (x - xmin) / (xmax - xmin)
+        end if
+
+        ! 3) standard → minmax [0,1]
+        zmin = minval(x_std)
+        zmax = maxval(x_std)
+        if (zmax == zmin) then
+        x_stdmm = 0.0_r8
+        else
+        x_stdmm = (x_std - zmin) / (zmax - zmin)
+        end if
+
+    end subroutine normalize_standardize_chain
+
+    !-----------------------------------------------------------------------
 
     subroutine next_ten_days(dayofyear, doy_arr)
       real(r8), intent(in)  :: dayofyear
@@ -238,7 +308,7 @@ program MLPhenology
       end do
     end subroutine next_ten_days
 
-    subroutine run_tft_model (the_tft_torch_model, ta_min, pr, sw, lai, doy_arr, out_data_tft)
+    subroutine run_tft_model (the_tft_torch_model, ta_min, ta_max, pr, sw, lai, soilm, doy, photo, doy_arr, out_data_tft)
 
         use   iso_c_binding,     only : c_float, c_int
         use   ftorch,            only : torch_model, torch_model_load, torch_model_forward, &
@@ -247,7 +317,7 @@ program MLPhenology
     
         ! Arguments
         character(len=*), intent(in) :: the_tft_torch_model
-        real(r8),         intent(in) :: ta_min(:), pr(:), sw(:), lai(:), doy_arr(10)
+        real(r8),         intent(in) :: ta_min(:), ta_max(:), pr(:), sw(:), lai(:), soilm(:), doy(:), photo(:), doy_arr(10)
         real(r8),         intent(out) :: out_data_tft(1,10)
 
         ! Local
@@ -271,18 +341,21 @@ program MLPhenology
         n_in  = 6                                                                             ! 6 input tensors
         n_out = 1                                                                             ! 1 output tensor (the 3‐quantile forecast)
 
-        !---  Populate input data (first n_input days)
+        !---  Populate input data (first n_input days)---
         static_num= reshape([ 1_c_float, 1_c_float ], [1,2])    ! TD: substitute with true lat/lon
 
-        hist_num(1,:,1)= real(ta_min(1:60), c_float)                        ! TD: replace with tmin
-        hist_num(1,:,2)= real(ta_min(1:60), c_float)                        ! TD: replace with tmax 
+        hist_num(1,:,1)= real(ta_min(1:60), c_float)                        
+        hist_num(1,:,2)= real(ta_max(1:60), c_float)                        
         hist_num(1,:,3)= real(pr(1:60), c_float)
         hist_num(1,:,4)= real(sw(1:60), c_float)
-        ! TODO: Replace the following placeholder assignments with the correct variables for each feature
-        hist_num(1,:,5)= real(ta_min(1:60), c_float)                        ! TODO: replace with photoperiod variable
-        hist_num(1,:,6)= real(ta_min(1:60), c_float)                        ! TODO: replace with soil moisture variable
-        hist_num(1,:,7)= real(ta_min(1:60), c_float)                        ! TODO: replace with day of year variable
-        hist_num(1,:,8)= real(ta_min(1:60), c_float)                        ! TODO: replace with lai variable
+        hist_num(1,:,5)= real(photo(1:60), c_float)
+        hist_num(1,:,6)= real(soilm(1:60), c_float)
+        hist_num(1,:,7)= real(doy(1:60), c_float)
+        hist_num(1,:,8)= real(lai(1:60), c_float)
+        !  ---- print raw LAI  ----
+        print *, "target LAI ", lai(61:70)
+        !print *, "raw historical LAI ", lai(1:60)
+
 
         fut_num(1,:,1) = real(doy_arr(1:10), c_float)                   ! future 10 days of year
 
@@ -290,25 +363,8 @@ program MLPhenology
         hist_cat      = reshape(empty_cat_raw, [1,60,0])                ! no historical categorical features
         fut_cat       = reshape(empty_cat_raw, [1,10,0])                ! no future categorical features
 
-        ! ---- normalize historical channels ----
-        do j = 1, 8
-          hmin(j) = minval( hist_num(1, :, j) )
-          hmax(j) = maxval( hist_num(1, :, j) )
-          if (hmax(j) > hmin(j)) then
-            hist_num(1, :, j) = ( hist_num(1, :, j) - hmin(j) ) / (hmax(j) - hmin(j))
-          else
-            hist_num(1, :, j) = 0.0_c_float  ! or leave at 0 if flat
-          end if
-        end do
 
-        ! ---- normalize future single channel ----
-        fmin = minval( fut_num(1, :, 1) )
-        fmax = maxval( fut_num(1, :, 1) )
-        if (fmax > fmin) then
-          fut_num(1, :, 1) = ( fut_num(1, :, 1) - fmin ) / (fmax - fmin)
-        else
-          fut_num(1, :, 1) = 0.0_c_float
-        end if
+
 
         !===============
         ! load pytorch model
@@ -349,6 +405,7 @@ program MLPhenology
         end do
         call torch_delete(outputs(1))
         deallocate(inputs, outputs, L2, L3)
+
 
     end subroutine run_tft_model
   
