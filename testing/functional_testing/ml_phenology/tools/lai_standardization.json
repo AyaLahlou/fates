@@ -1,0 +1,7 @@
+{
+  "lai_mean": 2.5548695699043424,
+  "lai_std": 1.9535306532434973,
+  "source_pkl": "/glade/u/home/ayal/phenology-ml-clm/data/processed/US-MMS_forcing_1999-2014.pkl",
+  "max_residual": 9.927810618037824e-08,
+  "gate_a_status": "PASS"
+}
